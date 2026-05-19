@@ -1,0 +1,38 @@
+[tool.uv.workspace]
+members = ["ipm", "simplex", "common", "linopt_native"]
+
+[project]
+name = "linopt"
+version = "0.1.0"
+description = "Linear optimization solvers"
+requires-python = ">=3.13"
+dependencies = [
+    "common",
+    "ipm",
+    "linopt-native",
+    "pytest-unordered>=0.7.0",
+    "scipy>=1.17.1",
+    "simplex",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "ruff>=0.15.2",
+]
+
+[tool.uv.sources]
+common = { workspace = true }
+ipm = { workspace = true }
+linopt-native = { workspace = true }
+simplex = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["common/tests", "ipm/tests", "simplex/tests", "linopt_native/tests"]
+addopts = "-ra -v"
+pythonpath = ["ipm/src", "simplex/src", "common/src"]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
