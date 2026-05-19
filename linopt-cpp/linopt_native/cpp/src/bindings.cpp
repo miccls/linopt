@@ -8,28 +8,6 @@ namespace py = pybind11;
 
 namespace {
 
-linopt_native::PivotRule parse_pivot_rule(const std::string& pivot_rule) {
-  if (pivot_rule == "bland") {
-    return linopt_native::PivotRule::Bland;
-  }
-  if (pivot_rule == "dantzig") {
-    return linopt_native::PivotRule::Dantzig;
-  }
-  if (pivot_rule == "steepest_edge") {
-    return linopt_native::PivotRule::SteepestEdge;
-  }
-  if (pivot_rule == "dual_bland") {
-    return linopt_native::PivotRule::DualBland;
-  }
-  if (pivot_rule == "dual_dantzig") {
-    return linopt_native::PivotRule::DualDantzig;
-  }
-  if (pivot_rule == "dual_steepest_edge") {
-    return linopt_native::PivotRule::DualSteepestEdge;
-  }
-  throw linopt_native::LinoptNativeError("Unsupported native pivot rule: " + pivot_rule);
-}
-
 linopt_native::LogCallback make_log_callback(const py::object& callback) {
   if (callback.is_none()) {
     return nullptr;
@@ -58,6 +36,9 @@ py::dict simplex_result_to_py(const linopt_native::SimplexResult& result) {
   out["iterations"] = result.iterations;
   out["basis_history"] = basis_history_to_py(result.basis_history);
   out["objective_history"] = result.objective_history;
+  out["profile_enabled"] = result.profile.enabled;
+  out["profile_seconds"] = result.profile.seconds;
+  out["profile_calls"] = result.profile.calls;
   return out;
 }
 
@@ -81,6 +62,14 @@ py::dict ipm_result_to_py(const linopt_native::IpmResult& result) {
 PYBIND11_MODULE(_native, m) {
   py::register_exception<linopt_native::LinoptNativeError>(m, "LinoptNativeError");
 
+  py::enum_<linopt_native::PivotRule>(m, "PivotRule")
+      .value("Bland", linopt_native::PivotRule::Bland)
+      .value("Dantzig", linopt_native::PivotRule::Dantzig)
+      .value("SteepestEdge", linopt_native::PivotRule::SteepestEdge)
+      .value("DualBland", linopt_native::PivotRule::DualBland)
+      .value("DualDantzig", linopt_native::PivotRule::DualDantzig)
+      .value("DualSteepestEdge", linopt_native::PivotRule::DualSteepestEdge);
+
   m.def(
       "solve_primal_simplex_dense",
       [](const Eigen::MatrixXd& a,
@@ -88,7 +77,7 @@ PYBIND11_MODULE(_native, m) {
          const Eigen::VectorXd& c,
          const Eigen::VectorXi& initial_basis,
          int max_iterations,
-         const std::string& pivot_rule,
+         linopt_native::PivotRule pivot_rule,
          const py::object& log_callback) {
         return simplex_result_to_py(linopt_native::solve_primal_simplex_dense(
             a,
@@ -96,7 +85,7 @@ PYBIND11_MODULE(_native, m) {
             c,
             initial_basis,
             max_iterations,
-            parse_pivot_rule(pivot_rule),
+            pivot_rule,
             make_log_callback(log_callback)));
       },
       py::arg("A"),
@@ -114,7 +103,7 @@ PYBIND11_MODULE(_native, m) {
          const Eigen::VectorXd& c,
          const Eigen::VectorXi& initial_basis,
          int max_iterations,
-         const std::string& pivot_rule,
+         linopt_native::PivotRule pivot_rule,
          const py::object& log_callback) {
         return simplex_result_to_py(linopt_native::solve_dual_simplex_dense(
             a,
@@ -122,7 +111,7 @@ PYBIND11_MODULE(_native, m) {
             c,
             initial_basis,
             max_iterations,
-            parse_pivot_rule(pivot_rule),
+            pivot_rule,
             make_log_callback(log_callback)));
       },
       py::arg("A"),

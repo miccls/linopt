@@ -1,8 +1,8 @@
 import logging
+import time
 
 import numpy as np
 from common import lp_problem
-from linopt_native import solve_predictor_corrector_dense
 
 from ipm import ipm_tools
 
@@ -66,18 +66,31 @@ class PredictorCorrector:
             "Iter       Primal       Dual       Primal      Dual     Compl       Time"
         )
 
-        native_result = solve_predictor_corrector_dense(
-            np.asarray(problem.constraint_matrix, dtype=float),
-            np.asarray(problem.rhs, dtype=float),
-            np.asarray(problem.objective, dtype=float),
-            {"x": point.x, "lam": point.lam, "s": point.s},
-            self.max_iterations,
-            self.optimality_tolerance,
-            logger.info,
-        )
-        final_point = ipm_tools.PrimalDualTuple(
-            x=np.asarray(native_result["x"], dtype=float),
-            lam=np.asarray(native_result["lam"], dtype=float),
-            s=np.asarray(native_result["s"], dtype=float),
-        )
-        return final_point
+        iteration = 0
+        start = time.time()
+        while (
+            ipm_tools.calculate_duality_measure(point.x, point.s)
+            > self.optimality_tolerance
+            and iteration < self.max_iterations
+        ):
+            direction = ipm_tools.solve_predictor_corrector_direction(problem, point)
+            eta = 0.995 ** (1.0 / (iteration + 1))
+            primal_step_size = min(
+                ipm_tools.calculate_max_step_size(point.x, direction.x) * eta, 1.0
+            )
+            dual_step_size = min(
+                ipm_tools.calculate_max_step_size(point.s, direction.s) * eta, 1.0
+            )
+
+            point = update_point(point, direction, primal_step_size, dual_step_size)
+            logger.info(
+                f"{iteration:4d}   {problem.objective @ point.x:10.3e}  "
+                f"{problem.rhs @ point.lam:10.3e}  "
+                f"{np.linalg.norm(problem.constraint_matrix @ point.x - problem.rhs):10.3e} "
+                f"{np.linalg.norm(problem.constraint_matrix.T @ point.lam + point.s - problem.objective):10.3e}  "
+                f"{ipm_tools.calculate_duality_measure(point.x, point.s):8.3e}    "
+                f"{time.time() - start:5.2}s"
+            )
+            iteration += 1
+
+        return point

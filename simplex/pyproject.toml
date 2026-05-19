@@ -9,7 +9,6 @@ dependencies = [
     # jaxtyping runtime type checking
     "common",
     "jaxtyping>=0.3.5",
-    "linopt-native",
     "numpy>=2.4.1",
 ]
 
@@ -82,4 +81,3 @@ ban-relative-imports = "all"
 
 [tool.uv.sources]
 common = { workspace = true }
-linopt-native = { workspace = true }

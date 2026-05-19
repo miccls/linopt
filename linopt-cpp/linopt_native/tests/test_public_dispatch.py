@@ -2,9 +2,10 @@ import numpy as np
 import pytest
 from common import lp_problem
 from ipm.predictor_corrector import PredictorCorrector
+from linopt_native import PivotRule, solve_primal_simplex_dense
 from simplex import pivoting_strategy
-from simplex.dual_simplex import DualSimplex
-from simplex.primal_simplex import PrimalSimplex
+from simplex.dual_simplex import DualPivotRule, DualSimplex
+from simplex.primal_simplex import PrimalPivotRule, PrimalSimplex
 
 
 def test_public_primal_simplex_dispatches_to_native() -> None:
@@ -18,13 +19,36 @@ def test_public_primal_simplex_dispatches_to_native() -> None:
     b = np.array([20.0, 20.0, 20.0])
     c = np.array([-10.0, -12.0, -12.0, 0.0, 0.0, 0.0])
 
-    result = PrimalSimplex(pivot_strategy=pivoting_strategy.DantzigsRule()).solve(
+    result = PrimalSimplex(pivot_rule=PrimalPivotRule.DANTZIG).solve(
         lp_problem.LpProblem(a, b, c),
         initial_basis=np.array([3, 4, 5]),
     )
 
     assert result.objective_value == pytest.approx(-136.0)
     assert result.solution == pytest.approx(np.array([4.0, 4.0, 4.0, 0.0, 0.0, 0.0]))
+
+
+def test_native_primal_simplex_accepts_pivot_rule_enum() -> None:
+    a = np.array(
+        [
+            [1.0, 2.0, 2.0, 1.0, 0.0, 0.0],
+            [2.0, 1.0, 2.0, 0.0, 1.0, 0.0],
+            [2.0, 2.0, 1.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    b = np.array([20.0, 20.0, 20.0])
+    c = np.array([-10.0, -12.0, -12.0, 0.0, 0.0, 0.0])
+
+    result = solve_primal_simplex_dense(
+        a,
+        b,
+        c,
+        np.array([3, 4, 5], dtype=np.int32),
+        100,
+        PivotRule.Dantzig,
+    )
+
+    assert result["objective"] == pytest.approx(-136.0)
 
 
 def test_public_dual_simplex_dispatches_to_native() -> None:
@@ -39,7 +63,7 @@ def test_public_dual_simplex_dispatches_to_native() -> None:
     b = np.array([20.0, 20.0, 20.0, 4.0])
     c = np.array([-10.0, -12.0, -12.0, 0.0, 0.0, 0.0, 0.0])
 
-    result = DualSimplex(pivot_strategy=pivoting_strategy.DualDantzigsRule()).solve(
+    result = DualSimplex(pivot_rule=DualPivotRule.DANTZIG).solve(
         lp_problem.LpProblem(a, b, c),
         initial_basis=np.array([0, 1, 2, 6]),
     )

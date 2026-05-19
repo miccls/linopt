@@ -7,6 +7,9 @@ option(LINOPT_NATIVE_BUILD_PYTHON "Build Python extension module" ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 
 include(FetchContent)
 
@@ -23,8 +26,12 @@ add_library(Eigen3::Eigen INTERFACE IMPORTED)
 target_include_directories(Eigen3::Eigen INTERFACE ${eigen_SOURCE_DIR})
 
 add_library(linopt_native_core
-  cpp/src/simplex.cpp
-  cpp/src/ipm.cpp
+  cpp/src/dual_simplex.cpp
+  cpp/src/ipm_tools.cpp
+  cpp/src/pivot_strategy.cpp
+  cpp/src/predictor_corrector.cpp
+  cpp/src/primal_simplex.cpp
+  cpp/src/simplex_utils.cpp
 )
 target_include_directories(linopt_native_core PUBLIC cpp/include)
 target_link_libraries(linopt_native_core PUBLIC Eigen3::Eigen)

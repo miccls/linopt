@@ -1,6 +1,6 @@
 [project]
 name = "linopt-native"
-version = "0.1.1"
+version = "0.1.5"
 description = "Private native acceleration routines for linopt"
 requires-python = ">=3.13"
 dependencies = ["numpy>=2.4.1"]

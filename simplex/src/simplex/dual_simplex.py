@@ -1,34 +1,25 @@
 import logging
+import time
 
 import jaxtyping
 import numpy as np
 import scipy.linalg
 from common import lp_problem
 from common.numpy_type_aliases import ArrayF, ArrayI
-from linopt_native import solve_dual_simplex_dense
 
 import simplex_util
-from simplex import pivoting_strategy
+from simplex import linear_algebra, pivoting_strategy
 from simplex_util import (
+    INVERSE_RECOMPUTE_INTERVAL,
     NON_NEGATIVITY_TOLERANCE,
     SolveHistory,
     get_non_basic_vars,
 )
 
 logger = logging.getLogger(__name__)
+LOG_FIRST_ITERATIONS = 10
+LOG_INTERVAL = 100
 
-
-def _native_dual_pivot_rule(strategy: pivoting_strategy.DualPivotingStrategy) -> str:
-    if isinstance(strategy, pivoting_strategy.DualBlandsRule):
-        return "dual_bland"
-    if isinstance(strategy, pivoting_strategy.DualDantzigsRule):
-        return "dual_dantzig"
-    if isinstance(strategy, pivoting_strategy.DualSteepestEdgeRule):
-        return "dual_steepest_edge"
-    raise TypeError(
-        "Native dual simplex only supports DualBlandsRule, DualDantzigsRule, "
-        "and DualSteepestEdgeRule pivot strategies."
-    )
 
 # Solve with primal simplex
 # N^T \lambda + s = c
@@ -172,33 +163,80 @@ class DualSimplex:
             problem, initial_basis = self._setup_artificial_problem(problem)
             is_augmented = problem.num_variables > original_num_variables
 
+        basis = np.array(initial_basis)
+        non_basic_vars = get_non_basic_vars(problem.num_variables, basis)
+        inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
+        x_basis = inv_basis_matrix @ problem.rhs
+        self.pivoting_strategy_.initialize(problem, basis)
+
         logger.info("Starting Dual Simplex algorithm...")
-        native_result = solve_dual_simplex_dense(
-            np.asarray(problem.constraint_matrix, dtype=float),
-            np.asarray(problem.rhs, dtype=float),
-            np.asarray(problem.objective, dtype=float),
-            np.asarray(initial_basis, dtype=np.int32),
-            max_iterations,
-            _native_dual_pivot_rule(self.pivoting_strategy_),
-            logger.info,
+        self.solve_history_.update(basis, float(problem.objective[basis] @ x_basis))
+        logger.info(
+            f"Initial objective value {self.solve_history_.objective_history[-1]}"
         )
-        for native_basis, objective in zip(
-            native_result["basis_history"],
-            native_result["objective_history"],
-            strict=True,
-        ):
-            self.solve_history_.update(np.asarray(native_basis, dtype=int), objective)
+        logger.info("Iter     Objective      Primal Inf.    Dual Inf.    Time")
+        start = time.time()
 
-        if native_result["status"] == "infeasible":
-            raise simplex_util.InfeasibleLpError(native_result["message"])
-        if native_result["status"] == "iteration_limit":
-            raise simplex_util.IterationLimitError(native_result["message"])
-        if native_result["status"] != "optimal":
-            raise simplex_util.SolveFailedError(native_result["message"])
+        for iteration in range(1, max_iterations):
+            if np.all(x_basis >= -NON_NEGATIVITY_TOLERANCE):
+                logger.info(
+                    f"Simplex algorithm found optimal objective {self.solve_history_.objective_history[-1]} after {iteration - 1} iterations."
+                )
+                return self._finalize_result(
+                    problem, basis, x_basis, is_augmented, original_num_variables
+                )
 
-        solution = np.asarray(native_result["solution"], dtype=float)
-        basis = np.asarray(native_result["basis"], dtype=int)
-        x_basis = solution[basis]
-        return self._finalize_result(
-            problem, basis, x_basis, is_augmented, original_num_variables
+            exiting_index = self.pivoting_strategy_.pick_exiting_index(
+                x_basis, basis, inv_basis_matrix
+            )
+            lam = inv_basis_matrix.T @ problem.objective[basis]
+            s_non_basic = problem.objective[non_basic_vars] - (
+                problem.constraint_matrix[:, non_basic_vars].T @ lam
+            )
+            v = -inv_basis_matrix[exiting_index, :]
+            non_basic_direction = problem.constraint_matrix[:, non_basic_vars].T @ v
+            if np.max(non_basic_direction) <= pivoting_strategy.PIVOTING_TOLERANCE:
+                raise simplex_util.InfeasibleLpError(
+                    "Dual simplex detected primal infeasibility."
+                )
+
+            entering_index = self.pivoting_strategy_.pick_entering_index(
+                non_basic_vars, s_non_basic, non_basic_direction
+            )
+            entering_variable = non_basic_vars[entering_index]
+            basic_direction = inv_basis_matrix @ problem.constraint_matrix[
+                :, entering_variable
+            ]
+            gamma = x_basis[exiting_index] / basic_direction[exiting_index]
+            x_basis -= gamma * basic_direction
+            x_basis[exiting_index] = gamma
+
+            non_basic_vars[entering_index] = basis[exiting_index]
+            basis[exiting_index] = entering_variable
+            if iteration % INVERSE_RECOMPUTE_INTERVAL == 0:
+                inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
+                self.pivoting_strategy_.initialize(problem, basis)
+            else:
+                inv_basis_matrix = linear_algebra.update_inverse(
+                    problem.constraint_matrix,
+                    inv_basis_matrix,
+                    entering_variable,
+                    exiting_index,
+                )
+
+            self.solve_history_.update(basis, float(problem.objective[basis] @ x_basis))
+            if (iteration < LOG_FIRST_ITERATIONS) or (iteration % LOG_INTERVAL == 0):
+                primal_inf = np.sum(
+                    np.abs(problem.constraint_matrix[:, basis] @ x_basis - problem.rhs)
+                ) - np.minimum(x_basis, 0.0).sum()
+                dual_inf = abs(min(float(np.min(s_non_basic)), 0.0))
+                logger.info(
+                    f"{iteration:4d}    {problem.objective[basis].T @ x_basis:10.3e}     "
+                    f"{primal_inf:10.3e}     {dual_inf:10.3e}"
+                    f"    {time.time() - start:.4}s"
+                )
+
+        logger.info(
+            f"Simplex algorithm terminated due to {max_iterations} iteration limit"
         )
+        raise simplex_util.IterationLimitError

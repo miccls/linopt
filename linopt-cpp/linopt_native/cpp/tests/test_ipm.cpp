@@ -38,3 +38,26 @@ TEST(NativeIpm, SolvesUnitBoxLp) {
   expected << 0.0, 0.0, 1.0, 1.0;
   EXPECT_TRUE(result.point.x.isApprox(expected, 1e-6));
 }
+
+TEST(NativeIpm, SolverClassSolvesUnitBoxLp) {
+  Eigen::MatrixXd a(2, 4);
+  a << 1.0, 0.0, 1.0, 0.0,
+       0.0, 1.0, 0.0, 1.0;
+  Eigen::VectorXd b(2);
+  b << 1.0, 1.0;
+  Eigen::VectorXd c(4);
+  c << 1.0, 1.0, 0.0, 0.0;
+  linopt_native::PrimalDualPoint point{
+      Eigen::VectorXd::Constant(4, 0.5),
+      Eigen::VectorXd::Constant(2, -0.25),
+      (Eigen::VectorXd(4) << 1.25, 1.25, 0.25, 0.25).finished(),
+  };
+
+  linopt_native::PredictorCorrector solver(100, 1e-10);
+  const auto result = solver.solve(a, b, c, point);
+
+  EXPECT_EQ(result.status, "optimal");
+  Eigen::VectorXd expected(4);
+  expected << 0.0, 0.0, 1.0, 1.0;
+  EXPECT_TRUE(result.point.x.isApprox(expected, 1e-6));
+}
