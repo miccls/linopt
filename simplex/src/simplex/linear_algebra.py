@@ -1,6 +1,189 @@
+from dataclasses import dataclass
+
 import jaxtyping
 import numpy as np
-from common.numpy_type_aliases import ArrayF
+import scipy.linalg
+from common.numpy_type_aliases import ArrayF, ArrayI
+from scipy import sparse
+from scipy.sparse.linalg import spsolve_triangular
+
+
+@dataclass
+class _ColumnEta:
+    index: int
+    indices: jaxtyping.Int[ArrayI, " nnz"]
+    values: jaxtyping.Float[ArrayF, " nnz"]
+    pivot: float
+
+    @classmethod
+    def from_column(
+        cls,
+        index: int,
+        column: jaxtyping.Float[ArrayF, " m"],
+    ) -> "_ColumnEta":
+        nonzero_indices = np.flatnonzero(column)
+        pivot = float(column[index])
+        if np.isclose(pivot, 0.0):
+            raise np.linalg.LinAlgError(
+                "ForrestTomlinFactorization update produced a zero eta pivot."
+            )
+        return cls(
+            index=index,
+            indices=nonzero_indices,
+            values=np.asarray(column[nonzero_indices], dtype=np.float64),
+            pivot=pivot,
+        )
+
+    def apply_inverse(
+        self, vector: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        """Solve E x = vector for a column eta matrix E."""
+        result = vector.copy()
+        pivot_component = result[self.index] / self.pivot
+        result[self.indices] -= self.values * pivot_component
+        result[self.index] = pivot_component
+        return result
+
+    def apply_inverse_transpose(
+        self, vector: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        """Solve E.T x = vector for a column eta matrix E."""
+        result = vector.copy()
+        dot_without_pivot = float(self.values @ vector[self.indices]) - (
+            self.pivot * vector[self.index]
+        )
+        result[self.index] = (vector[self.index] - dot_without_pivot) / self.pivot
+        return result
+
+    def matrix(self, matrix_size: int) -> sparse.csr_array:
+        eta_matrix = sparse.eye(matrix_size, format="lil")
+        eta_matrix[:, self.index] = sparse.csc_array(
+            (self.values, (self.indices, np.zeros_like(self.indices))),
+            shape=(matrix_size, 1),
+        )
+        return eta_matrix.tocsr()
+
+
+class ForrestTomlinFactorization:
+    """
+    Sparse Forrest-Tomlin-style basis factorization with product-form U updates.
+
+    The representation after k updates is
+        B = P L U E_1 E_2 ... E_k,
+    so solving with the basis uses
+        B^-1 = E_k^-1 ... E_2^-1 E_1^-1 U^-1 L^-1 P^T.
+
+    The base L and U factors are sparse triangular matrices. Basis updates are
+    stored as column eta records, so ftran/btran apply solve operations instead of
+    mutating and refactorizing U_bar as a general sparse matrix.
+    """
+
+    def __init__(self, basis_matrix: jaxtyping.Float[ArrayF, "m m"]) -> None:
+        permutation, l_factor, u_factor = scipy.linalg.lu(
+            np.asarray(basis_matrix, dtype=np.float64)
+        )
+        self.permutation = sparse.csr_array(permutation)
+        self.l_factor = sparse.csc_array(l_factor)
+        self.u_factor = sparse.csc_array(u_factor)
+        self.u_etas: list[_ColumnEta] = []
+
+    @classmethod
+    def from_factors(
+        cls,
+        l_factor: jaxtyping.Float[ArrayF, "m m"],
+        u_factor: jaxtyping.Float[ArrayF, "m m"],
+    ) -> "ForrestTomlinFactorization":
+        factorization = cls.__new__(cls)
+        factorization.permutation = sparse.eye(l_factor.shape[0], format="csr")
+        factorization.l_factor = sparse.csc_array(l_factor)
+        factorization.u_factor = sparse.csc_array(u_factor)
+        factorization.u_etas = []
+        return factorization
+
+    def ftran(
+        self, rhs: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        """Solve B x = rhs, returning x = B^-1 rhs."""
+        partial = self._left_factor_inverse_times(rhs)
+        return self._u_ftran(partial)
+
+    def btran(
+        self, rhs: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        """Solve B.T x = rhs, returning x = B^-T rhs."""
+        result = self._u_btran(rhs)
+        result = np.asarray(
+            spsolve_triangular(
+                self.l_factor.T,
+                result,
+                lower=False,
+                unit_diagonal=True,
+            ),
+            dtype=np.float64,
+        )
+        return np.asarray(self.permutation @ result, dtype=np.float64)
+
+    def update(
+        self,
+        entering_column: jaxtyping.Float[ArrayF, " m"],
+        exiting_index: int,
+    ) -> None:
+        """
+        Replace basis position `exiting_index` by `entering_column`.
+
+        This performs equations 11-13 of the Forrest-Tomlin update:
+        1. Transform a_q by the current left factors to get the spike column.
+        2. Solve with the current product-form U to get q = U_current^-1 a_q.
+        3. Append q as a column eta record for the replaced basis position.
+        """
+        # The entering column is first moved into the coordinate system owned by U.
+        spike_column = self._left_factor_inverse_times(entering_column)
+        eta_column = self._u_ftran(spike_column)
+        self.u_etas.append(_ColumnEta.from_column(exiting_index, eta_column))
+
+    def to_matrix(self) -> jaxtyping.Float[ArrayF, "m m"]:
+        """Reconstruct the represented basis matrix. Intended for tests/debugging."""
+        result = self.permutation @ self.l_factor
+        result = result @ self.u_factor
+        for eta in self.u_etas:
+            result = result @ eta.matrix(result.shape[0])
+        return np.asarray(result.toarray(), dtype=np.float64)
+
+    def _left_factor_inverse_times(
+        self, rhs: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        result: ArrayF = np.asarray(
+            spsolve_triangular(
+                self.l_factor,
+                self.permutation.T @ rhs,
+                lower=True,
+                unit_diagonal=True,
+            ),
+            dtype=np.float64,
+        )
+        return result
+
+    def _u_ftran(
+        self, rhs: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        result: ArrayF = np.asarray(
+            spsolve_triangular(self.u_factor, rhs, lower=False),
+            dtype=np.float64,
+        )
+        for eta in self.u_etas:
+            result = eta.apply_inverse(result)
+        return result
+
+    def _u_btran(
+        self, rhs: jaxtyping.Float[ArrayF, " m"]
+    ) -> jaxtyping.Float[ArrayF, " m"]:
+        result: ArrayF = np.asarray(rhs, dtype=np.float64)
+        for eta in reversed(self.u_etas):
+            result = eta.apply_inverse_transpose(result)
+        return np.asarray(
+            spsolve_triangular(self.u_factor.T, result, lower=True),
+            dtype=np.float64,
+        )
 
 
 def update_inverse(

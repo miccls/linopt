@@ -212,6 +212,7 @@ dependencies = [
     { name = "common" },
     { name = "ipm" },
     { name = "pytest-unordered" },
+    { name = "scikit-umfpack" },
     { name = "scipy" },
     { name = "simplex" },
 ]
@@ -228,6 +229,7 @@ requires-dist = [
     { name = "common", editable = "common" },
     { name = "ipm", editable = "ipm" },
     { name = "pytest-unordered", specifier = ">=0.7.0" },
+    { name = "scikit-umfpack", specifier = ">=0.4.2" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "simplex", editable = "simplex" },
 ]
@@ -434,6 +436,16 @@ wheels = [
 ]
 
 [[package]]
+name = "scikit-umfpack"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c9/87/e9837fbc60271bcbc569911814f3e63cb40c75aa4904a3d1d82cf8f5e079/scikit_umfpack-0.4.2.tar.gz", hash = "sha256:7cd652e6559804a52379f4ff367cfad54d6f7a6fc65a5e0bd26d26a1282c3f64", size = 33827, upload-time = "2025-07-08T08:52:41.643Z" }
+
+[[package]]
 name = "scipy"
 version = "1.17.1"
 source = { registry = "https://pypi.org/simple" }
@@ -493,6 +505,7 @@ dependencies = [
     { name = "common" },
     { name = "jaxtyping" },
     { name = "numpy" },
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -515,6 +528,7 @@ requires-dist = [
     { name = "common", editable = "common" },
     { name = "jaxtyping", specifier = ">=0.3.5" },
     { name = "numpy", specifier = ">=2.4.1" },
+    { name = "scipy", specifier = ">=1.17.1" },
 ]
 
 [package.metadata.requires-dev]

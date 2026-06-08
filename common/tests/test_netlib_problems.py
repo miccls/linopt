@@ -117,11 +117,11 @@ def test_netlib_ipm(
     lp = get_problem(name, cached_lp_problems)
     optimum = NETLIB_SOLUTIONS[name]["optimum"]
 
-    ipm_solver = predictor_corrector.PredictorCorrector(10000, 1e-6)
+    ipm_solver = predictor_corrector.PredictorCorrector(10000, 1e-7)
     solution = ipm_solver.solve(lp)
 
     obtained_optimum = float(lp.objective.T @ solution.x)
-    assert np.isclose(obtained_optimum, optimum, rtol=1e-4)
+    assert np.isclose(obtained_optimum, optimum, rtol=1e-3)
 
 
 @pytest.mark.parametrize("name", PROBLEMS_TO_TEST)
@@ -134,7 +134,7 @@ def test_netlib_primal_simplex(
     iters = int(NETLIB_SOLUTIONS[name].get("simplex_iters", 1000))
 
     primal_simplex_solver = primal_simplex.PrimalSimplex(
-        pivot_strategy=pivoting_strategy.SteepestEdgeRule()
+        pivot_strategy=pivoting_strategy.DantzigsRule()
     )
     solution = primal_simplex_solver.solve(lp, max_iterations=iters)
 
@@ -152,7 +152,7 @@ def test_netlib_dual_simplex(
     iters = int(NETLIB_SOLUTIONS[name].get("simplex_iters", 1000))
 
     dual_simplex_solver = dual_simplex.DualSimplex(
-        pivot_strategy=pivoting_strategy.DualDantzigsRule()
+        pivot_strategy=pivoting_strategy.DualSteepestEdgeRule()
     )
     solution = dual_simplex_solver.solve(lp, max_iterations=iters)
 

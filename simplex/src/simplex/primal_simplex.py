@@ -27,13 +27,14 @@ LOG_INTERVAL = 100
 
 def is_linearly_independent(
     problem: lp_problem.LpProblem,
-    inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"],
+    basis_factorization: linear_algebra.ForrestTomlinFactorization,
     entering_var: int,
     exiting_index: int,
 ) -> bool:
-    pivot_column_entry = (
-        inv_basis_matrix[exiting_index] @ problem.constraint_matrix[:, entering_var]
+    basic_direction = basis_factorization.ftran(
+        problem.constraint_matrix[:, entering_var]
     )
+    pivot_column_entry = basic_direction[exiting_index]
     tolerance = 1e-9
     return bool(abs(pivot_column_entry) > tolerance)
 
@@ -45,7 +46,9 @@ def purge_aux_vars(
 ) -> jaxtyping.Int[ArrayI, " m"]:
     aux_vars_still_in_basis = [b for b in basis if not b < num_variables]
     if aux_vars_still_in_basis:
-        inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
+        basis_factorization = linear_algebra.ForrestTomlinFactorization(
+            problem.constraint_matrix[:, basis]
+        )
 
         while aux_vars_still_in_basis:
             exiting_variable = aux_vars_still_in_basis.pop()
@@ -57,20 +60,17 @@ def purge_aux_vars(
             non_basic_vars = (b for b in range(num_variables) if b not in basis)
             while not is_linearly_independent(
                 problem,
-                inv_basis_matrix,
+                basis_factorization,
                 (entering_var := next(non_basic_vars)),
                 exiting_index=exiting_index,
             ):
                 pass
 
-            basis[exiting_index] = entering_var
-
-            inv_basis_matrix = linear_algebra.update_inverse(
-                problem.constraint_matrix,
-                inv_basis_matrix,
-                entering_variable=entering_var,
+            basis_factorization.update(
+                problem.constraint_matrix[:, entering_var],
                 exiting_index=exiting_index,
             )
+            basis[exiting_index] = entering_var
     return basis
 
 
@@ -152,10 +152,17 @@ class PrimalSimplex:
         problem: lp_problem.LpProblem,
         basis: jaxtyping.Int[ArrayI, " m"],
         non_basic_vars: jaxtyping.Int[ArrayI, " num_nonbasic"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"],
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> jaxtyping.Float[ArrayF, " num_nonbasic"]:
-        lambda_t = inv_basis_matrix.T @ problem.objective[basis]
-        return problem.objective[non_basic_vars] - problem.constraint_matrix[:, non_basic_vars].T @ lambda_t
+        lambda_t = basis_factorization.btran(problem.objective[basis])
+        all_dual_constraint_values = np.asarray(
+            problem.sparse_constraint_matrix.T @ lambda_t
+        )
+        reduced_costs: ArrayF = (
+            problem.objective[non_basic_vars]
+            - all_dual_constraint_values[non_basic_vars]
+        )
+        return reduced_costs
 
     def _finalize_result(
         self,
@@ -191,9 +198,11 @@ class PrimalSimplex:
                 ) from e
         non_basic_vars = get_non_basic_vars(problem.num_variables, basis)
 
-        inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
-        self.pivoting_strategy_.initialize(problem, basis)
-        x_basis = inv_basis_matrix @ problem.rhs
+        basis_factorization = linear_algebra.ForrestTomlinFactorization(
+            problem.constraint_matrix[:, basis]
+        )
+        self.pivoting_strategy_.initialize(problem, basis, basis_factorization)
+        x_basis = basis_factorization.ftran(problem.rhs)
 
         logger.info("Starting simplex algorithm...")
         self.solve_history_.update(basis, float(problem.objective[basis] @ x_basis))
@@ -205,7 +214,7 @@ class PrimalSimplex:
         start = time.time()
         for iteration in range(1, max_iterations):
             reduced_costs = self._compute_reduced_costs(
-                problem, basis, non_basic_vars, inv_basis_matrix
+                problem, basis, non_basic_vars, basis_factorization
             )
             if np.all(reduced_costs >= -NON_NEGATIVITY_TOLERANCE):
                 logger.info(
@@ -217,12 +226,14 @@ class PrimalSimplex:
                 reduced_costs, non_basic_vars
             )
             entering_variable = non_basic_vars[entering_index]
-            d = inv_basis_matrix @ problem.constraint_matrix[:, entering_variable]
+            d = basis_factorization.ftran(
+                problem.constraint_matrix[:, entering_variable]
+            )
             if np.all(d <= pivoting_strategy.PIVOTING_TOLERANCE):
                 raise UnboundedLpError
 
             basic_exiting_index = self.pivoting_strategy_.pick_exiting_index(
-                basis, x_basis, d, inv_basis_matrix
+                basis, x_basis, d, basis_factorization
             )
             x_entering = x_basis[basic_exiting_index] / d[basic_exiting_index]
 
@@ -230,13 +241,17 @@ class PrimalSimplex:
             basis[basic_exiting_index] = entering_variable
 
             if iteration % INVERSE_RECOMPUTE_INTERVAL == 0:
-                inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
-                self.pivoting_strategy_.initialize(problem, basis)
+                non_basic_vars = get_non_basic_vars(problem.num_variables, basis)
+                basis_factorization = linear_algebra.ForrestTomlinFactorization(
+                    problem.constraint_matrix[:, basis]
+                )
+                self.pivoting_strategy_.initialize(problem, basis, basis_factorization)
             else:
-                inv_basis_matrix = linear_algebra.update_inverse(
-                    problem.constraint_matrix,
-                    inv_basis_matrix,
-                    entering_variable,
+                self.pivoting_strategy_.sync_non_basic_variables(
+                    non_basic_vars
+                )  # TODO(martin): Remove
+                basis_factorization.update(
+                    problem.constraint_matrix[:, entering_variable],
                     basic_exiting_index,
                 )
 
@@ -245,9 +260,13 @@ class PrimalSimplex:
 
             self.solve_history_.update(basis, float(problem.objective[basis] @ x_basis))
             if (iteration < LOG_FIRST_ITERATIONS) or (iteration % LOG_INTERVAL == 0):
+                lambda_t = basis_factorization.btran(problem.objective[basis])
+                all_dual_constraint_values = np.asarray(
+                    problem.sparse_constraint_matrix.T @ lambda_t
+                )
                 logger.info(
                     f"{iteration:4d}    {problem.objective[basis].T @ x_basis:10.3e}     "
-                    f"{np.sum(np.abs(problem.constraint_matrix[:, basis] @ x_basis - problem.rhs)):10.3e}     {max(0.0, np.sum(problem.constraint_matrix.T @ (inv_basis_matrix @ problem.objective[basis]) - problem.objective)):10.3e}"
+                    f"{np.sum(np.abs(problem.constraint_matrix[:, basis] @ x_basis - problem.rhs)):10.3e}     {max(0.0, np.sum(all_dual_constraint_values - problem.objective)):10.3e}"
                     f"    {time.time() - start:.4}s"
                 )
 

@@ -81,7 +81,9 @@ def test_public_predictor_corrector_dispatches_to_native() -> None:
     assert result.x == pytest.approx(np.array([0.0, 0.0, 1.0, 1.0]))
 
 
-def test_public_primal_simplex_logs_match_python_shape(caplog: pytest.LogCaptureFixture) -> None:
+def test_public_primal_simplex_logs_match_python_shape(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     a = np.array(
         [
             [1.0, 2.0, 2.0, 1.0, 0.0, 0.0],
@@ -109,7 +111,9 @@ def test_public_primal_simplex_logs_match_python_shape(caplog: pytest.LogCapture
     )
 
 
-def test_public_dual_simplex_logs_match_python_shape(caplog: pytest.LogCaptureFixture) -> None:
+def test_public_dual_simplex_logs_match_python_shape(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     a = np.array(
         [
             [1.0, 2.0, 2.0, 1.0, 0.0, 0.0, 0.0],
@@ -150,5 +154,8 @@ def test_public_predictor_corrector_logs_match_python_shape(
 
     messages = [record.getMessage() for record in caplog.records]
     assert "                Objective              Residual" in messages
-    assert "Iter       Primal       Dual       Primal      Dual     Compl       Time" in messages
+    assert (
+        "Iter       Primal       Dual       Primal      Dual     Compl       Time"
+        in messages
+    )
     assert any(message.startswith("   0   ") for message in messages)

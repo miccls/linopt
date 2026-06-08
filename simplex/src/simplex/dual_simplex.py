@@ -89,8 +89,12 @@ class DualSimplex:
         non_basic_vars = get_non_basic_vars(problem.num_variables, basis)
 
         lam = inv_basis_matrix.T @ problem.objective[basis]
-        s_non_basic = problem.objective[non_basic_vars] - (
-            problem.constraint_matrix[:, non_basic_vars].T @ lam
+        all_dual_constraint_values = np.asarray(
+            problem.sparse_constraint_matrix.T @ lam
+        )
+        s_non_basic = (
+            problem.objective[non_basic_vars]
+            - all_dual_constraint_values[non_basic_vars]
         )
 
         if np.all(s_non_basic >= -NON_NEGATIVITY_TOLERANCE):
@@ -165,9 +169,11 @@ class DualSimplex:
 
         basis = np.array(initial_basis)
         non_basic_vars = get_non_basic_vars(problem.num_variables, basis)
-        inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
-        x_basis = inv_basis_matrix @ problem.rhs
-        self.pivoting_strategy_.initialize(problem, basis)
+        basis_factorization = linear_algebra.ForrestTomlinFactorization(
+            problem.constraint_matrix[:, basis]
+        )
+        x_basis = basis_factorization.ftran(problem.rhs)
+        self.pivoting_strategy_.initialize(problem, basis, basis_factorization)
 
         logger.info("Starting Dual Simplex algorithm...")
         self.solve_history_.update(basis, float(problem.objective[basis] @ x_basis))
@@ -187,14 +193,21 @@ class DualSimplex:
                 )
 
             exiting_index = self.pivoting_strategy_.pick_exiting_index(
-                x_basis, basis, inv_basis_matrix
+                x_basis, basis, basis_factorization
             )
-            lam = inv_basis_matrix.T @ problem.objective[basis]
-            s_non_basic = problem.objective[non_basic_vars] - (
-                problem.constraint_matrix[:, non_basic_vars].T @ lam
+            lam = basis_factorization.btran(problem.objective[basis])
+            all_dual_constraint_values = np.asarray(
+                problem.sparse_constraint_matrix.T @ lam
             )
-            v = -inv_basis_matrix[exiting_index, :]
-            non_basic_direction = problem.constraint_matrix[:, non_basic_vars].T @ v
+            s_non_basic = (
+                problem.objective[non_basic_vars]
+                - all_dual_constraint_values[non_basic_vars]
+            )
+            unit_exiting = np.zeros(len(basis))
+            unit_exiting[exiting_index] = 1.0
+            v = -basis_factorization.btran(unit_exiting)
+            all_direction_values = np.asarray(problem.sparse_constraint_matrix.T @ v)
+            non_basic_direction = all_direction_values[non_basic_vars]
             if np.max(non_basic_direction) <= pivoting_strategy.PIVOTING_TOLERANCE:
                 raise simplex_util.InfeasibleLpError(
                     "Dual simplex detected primal infeasibility."
@@ -204,9 +217,9 @@ class DualSimplex:
                 non_basic_vars, s_non_basic, non_basic_direction
             )
             entering_variable = non_basic_vars[entering_index]
-            basic_direction = inv_basis_matrix @ problem.constraint_matrix[
-                :, entering_variable
-            ]
+            basic_direction = basis_factorization.ftran(
+                problem.constraint_matrix[:, entering_variable]
+            )
             gamma = x_basis[exiting_index] / basic_direction[exiting_index]
             x_basis -= gamma * basic_direction
             x_basis[exiting_index] = gamma
@@ -214,21 +227,26 @@ class DualSimplex:
             non_basic_vars[entering_index] = basis[exiting_index]
             basis[exiting_index] = entering_variable
             if iteration % INVERSE_RECOMPUTE_INTERVAL == 0:
-                inv_basis_matrix = np.linalg.inv(problem.constraint_matrix[:, basis])
-                self.pivoting_strategy_.initialize(problem, basis)
+                basis_factorization = linear_algebra.ForrestTomlinFactorization(
+                    problem.constraint_matrix[:, basis]
+                )
+                self.pivoting_strategy_.initialize(problem, basis, basis_factorization)
             else:
-                inv_basis_matrix = linear_algebra.update_inverse(
-                    problem.constraint_matrix,
-                    inv_basis_matrix,
-                    entering_variable,
+                basis_factorization.update(
+                    problem.constraint_matrix[:, entering_variable],
                     exiting_index,
                 )
 
             self.solve_history_.update(basis, float(problem.objective[basis] @ x_basis))
             if (iteration < LOG_FIRST_ITERATIONS) or (iteration % LOG_INTERVAL == 0):
-                primal_inf = np.sum(
-                    np.abs(problem.constraint_matrix[:, basis] @ x_basis - problem.rhs)
-                ) - np.minimum(x_basis, 0.0).sum()
+                primal_inf = (
+                    np.sum(
+                        np.abs(
+                            problem.constraint_matrix[:, basis] @ x_basis - problem.rhs
+                        )
+                    )
+                    - np.minimum(x_basis, 0.0).sum()
+                )
                 dual_inf = abs(min(float(np.min(s_non_basic)), 0.0))
                 logger.info(
                     f"{iteration:4d}    {problem.objective[basis].T @ x_basis:10.3e}     "

@@ -6,9 +6,13 @@ import numpy as np
 from common.lp_problem import LpProblem
 from common.numpy_type_aliases import ArrayF, ArrayI
 
+from simplex import linear_algebra
 from simplex_util import get_non_basic_vars
 
 PIVOTING_TOLERANCE = 1e-5
+
+
+# TODO(martin): Implement primal/dual Devex rule for speed.
 
 
 class PrimalPivotingStrategy(ABC):
@@ -16,12 +20,20 @@ class PrimalPivotingStrategy(ABC):
         self,
         problem: LpProblem,
         basis: jaxtyping.Int[ArrayI, " m"],
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> None:
         """
         Gives stateful pivoting strategies a chance to reset for a new LP/basis.
         Stateless rules intentionally leave this as a no-op.
         """
-        del problem, basis
+        del problem, basis, basis_factorization
+
+    def sync_non_basic_variables(
+        self,
+        non_basic_vars: jaxtyping.Int[ArrayI, " num_nonbasic"],
+    ) -> None:
+        """Keeps stateful strategy bookkeeping aligned with the solver ordering."""
+        del non_basic_vars
 
     @abstractmethod
     def pick_entering_index(
@@ -36,7 +48,7 @@ class PrimalPivotingStrategy(ABC):
             reduced_costs: reduced costs
             non_basic_vars: variable indices of the non basic variables, assumed to be sorted
         Returns:
-            The variable index, i.e. an element of the array `non_basic_vars`, of a variable that should enter the basis.
+            The position in `non_basic_vars` of the variable that should enter the basis.
         """
         ...
 
@@ -46,7 +58,7 @@ class PrimalPivotingStrategy(ABC):
         basis: jaxtyping.Int[ArrayI, " m"],
         x_basis: jaxtyping.Float[ArrayF, " m"],
         basic_direction: jaxtyping.Float[ArrayF, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         """
         Selects the index exiting the basis.
@@ -75,19 +87,20 @@ class DualPivotingStrategy(ABC):
         self,
         problem: LpProblem,
         basis: jaxtyping.Int[ArrayI, " m"],
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> None:
         """
         Gives stateful pivoting strategies a chance to reset for a new LP/basis.
         Stateless rules intentionally leave this as a no-op.
         """
-        del problem, basis
+        del problem, basis, basis_factorization
 
     @abstractmethod
     def pick_exiting_index(
         self,
         primal_vars: jaxtyping.Float[ArrayF, " m"],
         basic_vars: jaxtyping.Int[ArrayI, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         """
         TODO(martins): Describe purpose of picking entering index
@@ -152,7 +165,7 @@ class BlandsRule(PrimalPivotingStrategy):
         basis: jaxtyping.Int[ArrayI, " m"],
         x_basis: jaxtyping.Float[ArrayF, " m"],
         basic_direction: jaxtyping.Float[ArrayF, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         return index_of_smallest_ratio(basis, x_basis, basic_direction)
 
@@ -182,7 +195,7 @@ class DantzigsRule(PrimalPivotingStrategy):
         basis: jaxtyping.Int[ArrayI, " m"],
         x_basis: jaxtyping.Float[ArrayF, " m"],
         basic_direction: jaxtyping.Float[ArrayF, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         return index_of_smallest_ratio(basis, x_basis, basic_direction)
 
@@ -201,31 +214,49 @@ class SteepestEdgeRule(PrimalPivotingStrategy):
         self.norm_eta_squared = np.array([], dtype=float)
 
         if problem is not None and initial_basis is not None:
-            self.initialize(problem, initial_basis)
+            self.initialize(
+                problem,
+                initial_basis,
+                linear_algebra.ForrestTomlinFactorization(
+                    problem.constraint_matrix[:, initial_basis]
+                ),
+            )
 
     @override
     def initialize(
         self,
         problem: LpProblem,
         basis: jaxtyping.Int[ArrayI, " m"],
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> None:
         self.problem = problem
         self.entering_index = -1
         self.non_basic_vars = get_non_basic_vars(problem.num_variables, basis)
 
-        b_inv = np.linalg.inv(problem.constraint_matrix[:, basis])
-        basic_directions = b_inv @ problem.constraint_matrix[:, self.non_basic_vars]
+        basic_directions = np.column_stack(
+            [
+                basis_factorization.ftran(problem.constraint_matrix[:, variable])
+                for variable in self.non_basic_vars
+            ]
+        )
 
         self.norm_eta_squared = 1.0 + np.sum(
             basic_directions * basic_directions,
             axis=0,
         )
 
+    @override
+    def sync_non_basic_variables(
+        self,
+        non_basic_vars: jaxtyping.Int[ArrayI, " num_nonbasic"],
+    ) -> None:
+        self.non_basic_vars = np.array(non_basic_vars, dtype=int)
+
     def _update_eta(
         self,
         exiting_index: int,
         basis: jaxtyping.Int[ArrayI, " m"],
-        b_inv: jaxtyping.Float[ArrayF, "m m"],
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
         basic_direction: jaxtyping.Float[ArrayF, " m"],
     ) -> None:
         if self.problem is None:
@@ -248,11 +279,21 @@ class SteepestEdgeRule(PrimalPivotingStrategy):
         entering_gamma = float(gamma[entering_index])
 
         # Compute all old non-basic directions needed for the recurrence,
-        # but avoid forming the full B_inv @ A_N matrix.
-        non_basic_columns = self.problem.constraint_matrix[:, non_basic_vars]
+        # but avoid forming the full B_inv matrix.
+        unit_exiting = np.zeros(len(basis))
+        unit_exiting[exiting_index] = 1.0
+        exiting_inverse_row = basis_factorization.btran(unit_exiting)
+        basic_direction_inverse_row = basis_factorization.btran(basic_direction)
 
-        alpha = (b_inv[exiting_index, :] @ non_basic_columns) / pivot
-        direction_dot_products = (basic_direction @ b_inv) @ non_basic_columns
+        all_alpha_numerators = np.asarray(
+            self.problem.sparse_constraint_matrix.T @ exiting_inverse_row
+        )
+        all_direction_dot_products = np.asarray(
+            self.problem.sparse_constraint_matrix.T @ basic_direction_inverse_row
+        )
+
+        alpha = all_alpha_numerators[non_basic_vars] / pivot
+        direction_dot_products = all_direction_dot_products[non_basic_vars]
 
         # Steepest-edge recurrence, applied in the current non-basic ordering.
         gamma -= 2.0 * alpha * direction_dot_products
@@ -296,22 +337,18 @@ class SteepestEdgeRule(PrimalPivotingStrategy):
         basis: jaxtyping.Int[ArrayI, " m"],
         x_basis: jaxtyping.Float[ArrayF, " m"],
         basic_direction: jaxtyping.Float[ArrayF, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
-        if inv_basis_matrix is None:
-            raise ValueError(
-                "SteepestEdgeRule requires the current inverse basis matrix."
-            )
-
         exiting_index = index_of_smallest_ratio(basis, x_basis, basic_direction)
         self._update_eta(
             exiting_index=exiting_index,
             basis=basis,
-            b_inv=inv_basis_matrix,
+            basis_factorization=basis_factorization,
             basic_direction=basic_direction,
         )
 
         return exiting_index
+
 
 class DualBlandsRule(DualPivotingStrategy):
     @override
@@ -319,7 +356,7 @@ class DualBlandsRule(DualPivotingStrategy):
         self,
         primal_vars: jaxtyping.Float[ArrayF, " m"],
         basic_vars: jaxtyping.Int[ArrayI, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         negative_basic_vars = [
             (variable_index, basis_index, var)
@@ -346,7 +383,7 @@ class DualDantzigsRule(DualPivotingStrategy):
         self,
         primal_vars: jaxtyping.Float[ArrayF, " m"],
         basic_vars: jaxtyping.Int[ArrayI, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         return int(np.argmin(primal_vars))
 
@@ -368,24 +405,30 @@ class DualSteepestEdgeRule(DualPivotingStrategy):
         self,
         primal_vars: jaxtyping.Float[ArrayF, " m"],
         basic_vars: jaxtyping.Int[ArrayI, " m"],
-        inv_basis_matrix: jaxtyping.Float[ArrayF, "m m"] | None = None,
+        basis_factorization: linear_algebra.ForrestTomlinFactorization,
     ) -> int:
         del basic_vars
-        if inv_basis_matrix is None:
-            raise ValueError(
-                "DualSteepestEdgeRule requires the current inverse basis matrix."
-            )
-
-        row_norms_squared = np.sum(inv_basis_matrix * inv_basis_matrix, axis=1)
         candidate_mask = primal_vars < -PIVOTING_TOLERANCE
-        candidate_scores = np.full_like(primal_vars, np.inf, dtype=float)
-        # Exact dual steepest edge uses ||e_i^T B^-1|| as the edge length for
-        # each candidate leaving row. Recomputing keeps the rule aligned with
-        # the current basis after inverse refreshes and Phase I augmentation.
-        candidate_scores[candidate_mask] = primal_vars[candidate_mask] / np.sqrt(
-            np.maximum(row_norms_squared[candidate_mask], PIVOTING_TOLERANCE)
+        candidate_indices = np.flatnonzero(
+            candidate_mask
+        )  # Maybe check if this is empty...
+
+        candidate_primal = primal_vars[candidate_indices]
+
+        basis_size = len(primal_vars)
+        inverse_rows = np.vstack(
+            [
+                basis_factorization.btran(np.eye(basis_size)[candidate_index])
+                for candidate_index in candidate_indices
+            ]
         )
-        return int(np.argmin(candidate_scores))
+        row_norms_squared = np.einsum("ij,ij->i", inverse_rows, inverse_rows)
+
+        candidate_scores = candidate_primal / np.sqrt(
+            np.maximum(row_norms_squared, PIVOTING_TOLERANCE)
+        )
+
+        return int(candidate_indices[np.argmin(candidate_scores)])
 
     @override
     def pick_entering_index(
