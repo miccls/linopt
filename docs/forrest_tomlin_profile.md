@@ -1,92 +1,102 @@
-# Forrest-Tomlin Basis Update Profile
+# Forrest-Tomlin factorization profile
 
 Date: 2026-06-20
 
-This note records the `scsd8` Netlib profile for the Simplex basis-factor update
-change on `agent-branch`.
+## Scope
 
-## Command
+The Simplex basis factorization on `agent-branch` represents the basis as
+`B = P L R_1 ... R_k U_bar`:
 
-The before run used a detached worktree at commit `215f98b`. The after run used
-the working tree after replacing the product-form column eta stack with explicit
-Forrest-Tomlin row eta factors.
+- `L` is stored as a sparse unit lower triangular factor;
+- each update appends a sparse Forrest-Tomlin row eta `R_i`;
+- `U_bar` is stored as a sparse right factor with a cached sparse solve
+  factorization for FTRAN, BTRAN, and update row solves.
 
-```bash
-uv run python - <<'PY'
-import cProfile
-import io
-import pstats
-import time
-from common import lp_problem
-from common.netlib import load_netlib_problems
-from simplex import pivoting_strategy, primal_simplex
+The algebra follows the row-eta update in Huangfu/Hall equations 11-13. This is
+still a correctness-first implementation: `U_bar` is rebuilt as a sparse matrix
+after every update, and its sparse solve factorization is rebuilt after every
+update. A production implementation should eventually keep the permuted
+triangular right factor and bump rows in a more incremental form.
 
-name = "scsd8"
-res = load_netlib_problems.download_and_parse_mps(name)
-assert res is not None
-A, b, c, row_types, _, _ = res
-A_std, b_std, c_std = load_netlib_problems.convert_to_standard_form(
-    A, b, c, row_types
-)
-problem = lp_problem.LpProblem(A_std, b_std, c_std)
-solver = primal_simplex.PrimalSimplex(
-    pivot_strategy=pivoting_strategy.DantzigsRule()
-)
-profiler = cProfile.Profile()
-start = time.perf_counter()
-profiler.enable()
-solution = solver.solve(problem, max_iterations=100000)
-profiler.disable()
-elapsed = time.perf_counter() - start
-objective = float(problem.objective.T @ solution.solution)
-stats_io = io.StringIO()
-pstats.Stats(profiler, stream=stats_io).strip_dirs().sort_stats(
-    "cumtime"
-).print_stats(15)
-print(f"objective={objective:.12g}")
-print(f"iterations={len(solver.history.objective_history) - 1}")
-print(f"elapsed_seconds={elapsed:.6f}")
-print(stats_io.getvalue())
+## Baseline
+
+Environment: macOS, Python 3.14.4 via `uv`, branch `agent-branch`.
+
+Full existing suite:
+
+```sh
+python3 - <<'PY'
+import subprocess
+try:
+    raise SystemExit(subprocess.run(['uv','run','pytest'], timeout=180).returncode)
+except subprocess.TimeoutExpired:
+    print('TIMEOUT after 180s')
+    raise SystemExit(124)
 PY
 ```
 
-## Results
+Result: timed out after 180s. Before timeout, two pre-existing IPM failures were
+observed:
 
-| Version | Objective | Simplex iterations | cProfile wall time |
-| --- | ---: | ---: | ---: |
-| Baseline `215f98b` product-form column eta checkpoint | 904.999999925 | 802 | 2.695 s |
-| `b1e35fe` Forrest-Tomlin row eta branch tip | 904.999999925 | 921 | 6.199 s |
+- `common/tests/test_netlib_problems.py::test_netlib_ipm[pilotnov]`
+- `common/tests/test_netlib_problems.py::test_netlib_ipm[dfl001]`
 
-## Top Profile Entries
+The Simplex `scsd8` case passed before the timeout.
 
-Baseline:
+Isolated Simplex `scsd8` baseline:
 
-```text
-10354 calls  1.900 s  scipy.sparse.linalg.spsolve_triangular
- 3416 calls  1.018 s  linear_algebra.py:_u_ftran
- 1761 calls  0.616 s  linear_algebra.py:_u_btran
- 1690 calls  0.742 s  linear_algebra.py:update
+```sh
+uv run pytest common/tests/test_netlib_problems.py::test_netlib_primal_simplex[scsd8] -q
 ```
 
-After:
+Result: passed in 3.41s pytest time, 3.616s wrapper wall time.
 
-```text
-4254 calls  3.894 s  linear_algebra.py:update
-4342 calls  1.022 s  scipy.sparse.linalg.splu
-12999 calls 1.174 s  scipy.sparse.linalg.spsolve_triangular
-4403 calls  0.748 s  linear_algebra.py:btran
-4342 calls  0.624 s  linear_algebra.py:ftran
+## After Change
+
+Focused Forrest-Tomlin tests:
+
+```sh
+uv run pytest simplex/tests/test_simplex.py::TestForrestTomlin -q
 ```
+
+Result: 5 passed in 0.09s, 0.297s wrapper wall time.
+
+Simplex tests:
+
+```sh
+uv run pytest simplex/tests/test_simplex.py -q
+```
+
+Result: 40 passed in 0.31s, 0.457s wrapper wall time.
+
+Isolated Simplex `scsd8`:
+
+```sh
+uv run pytest common/tests/test_netlib_problems.py::test_netlib_primal_simplex[scsd8] -q
+```
+
+Result: passed in 5.22s pytest time, 5.427s wrapper wall time.
+
+Full existing suite rerun:
+
+```sh
+python3 - <<'PY'
+import subprocess
+try:
+    raise SystemExit(subprocess.run(['uv','run','pytest'], timeout=180).returncode)
+except subprocess.TimeoutExpired:
+    print('TIMEOUT after 180s')
+    raise SystemExit(124)
+PY
+```
+
+Result: ended with signal 143 before emitting a clean pytest summary or timeout
+message. Before termination it had passed through `test_netlib_ipm[scsd8]`.
 
 ## Notes
 
-The new implementation represents the updated basis as `P L R_1 ... R_k U_bar`
-and stores each Forrest-Tomlin row eta factor explicitly. `ftran` and `btran`
-now apply the factored row operations rather than using a column eta
-product-form update.
-
-The remaining performance limitation is `U_bar`: after row updates it is a
-row-eta-permuted triangular factor, but this first pass rebuilds a sparse LU of
-that right factor on each update. The next optimization step should add a
-dedicated permuted-triangular solve and avoid repeated `splu` factorizations
-during `update`.
+The post-change `scsd8` run is slower than the recorded baseline. The tradeoff is
+intentional for this step: the right-factor solve is explicit and cached, and the
+update path uses the same sparse right-factor solve for `U_bar.T`. The next
+performance step is to replace the per-update sparse LU rebuild of `U_bar` with
+a true incremental permuted-triangular/bump solve.
