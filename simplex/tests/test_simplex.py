@@ -793,7 +793,8 @@ class TestForrestTomlin:
         rhs = np.array([1.0, -2.0, 3.0])
 
         assert factorization.to_matrix() == pytest.approx(updated_basis_matrix)
-        assert factorization.u_etas[0].index == exiting_index
+        assert factorization.row_etas[0].index == exiting_index
+        assert factorization.row_etas[0].values == pytest.approx(np.array([-2.5]))
         assert factorization.ftran(rhs) == pytest.approx(
             np.linalg.solve(updated_basis_matrix, rhs)
         )
@@ -816,6 +817,35 @@ class TestForrestTomlin:
         # simplex code relies on after the first pivot.
         factorization.update(constraint_matrix[:, 1], exiting_index=2)
         basis[2] = 1
+
+        updated_basis_matrix = constraint_matrix[:, basis]
+        rhs = np.array([1.0, -2.0, 3.0])
+
+        assert factorization.to_matrix() == pytest.approx(updated_basis_matrix)
+        assert factorization.ftran(rhs) == pytest.approx(
+            np.linalg.solve(updated_basis_matrix, rhs)
+        )
+        assert factorization.btran(rhs) == pytest.approx(
+            np.linalg.solve(updated_basis_matrix.T, rhs)
+        )
+
+    def test_forrest_tomlin_factorization_handles_pivoted_initial_lu(self) -> None:
+        basis = np.array([0, 1, 2])
+        constraint_matrix = np.array(
+            [
+                [0.0, 2.0, 1.0, 7.0, 3.0],
+                [1.0, 0.0, 3.0, 1.0, 8.0],
+                [4.0, 5.0, 6.0, 2.0, -1.0],
+            ]
+        )
+        factorization = linear_algebra.ForrestTomlinFactorization(
+            constraint_matrix[:, basis]
+        )
+
+        factorization.update(constraint_matrix[:, 3], exiting_index=0)
+        basis[0] = 3
+        factorization.update(constraint_matrix[:, 4], exiting_index=0)
+        basis[0] = 4
 
         updated_basis_matrix = constraint_matrix[:, basis]
         rhs = np.array([1.0, -2.0, 3.0])
