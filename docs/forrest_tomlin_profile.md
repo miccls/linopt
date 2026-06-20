@@ -77,6 +77,23 @@ uv run pytest common/tests/test_netlib_problems.py::test_netlib_primal_simplex[s
 
 Result: passed in 5.22s pytest time, 5.427s wrapper wall time.
 
+Branch-tip `scsd8` cProfile comparison:
+
+| Version | Objective | Simplex iterations | cProfile wall time |
+| --- | ---: | ---: | ---: |
+| Baseline `215f98b` product-form column eta checkpoint | 904.999999925 | 802 | 2.695s |
+| Branch tip `0d3262d` Forrest-Tomlin row eta update | 904.999999925 | 921 | 6.199s |
+
+Top cumulative entries for the branch-tip cProfile run:
+
+```text
+4254 calls   3.894s  linear_algebra.py:update
+4342 calls   1.022s  scipy.sparse.linalg.splu
+12999 calls  1.174s  scipy.sparse.linalg.spsolve_triangular
+4403 calls   0.748s  linear_algebra.py:btran
+4342 calls   0.624s  linear_algebra.py:ftran
+```
+
 Full existing suite rerun:
 
 ```sh
@@ -92,6 +109,20 @@ PY
 
 Result: ended with signal 143 before emitting a clean pytest summary or timeout
 message. Before termination it had passed through `test_netlib_ipm[scsd8]`.
+
+Final checks before PR update:
+
+```sh
+uv run pytest simplex/tests -q
+uv run pytest 'common/tests/test_netlib_problems.py::test_netlib_primal_simplex[scsd8]' simplex/tests/test_simplex.py -q
+uv run ruff check simplex/src/simplex/linear_algebra.py simplex/tests/test_simplex.py docs/forrest_tomlin_profile.md simplex/forrest_tomlin_update_notes.md
+```
+
+Results:
+
+- `simplex/tests`: 46 passed in 0.39s.
+- `scsd8` plus `simplex/tests/test_simplex.py`: 40 passed in 6.25s.
+- Ruff: passed.
 
 ## Notes
 
