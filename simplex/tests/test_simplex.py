@@ -793,7 +793,8 @@ class TestForrestTomlin:
         rhs = np.array([1.0, -2.0, 3.0])
 
         assert factorization.to_matrix() == pytest.approx(updated_basis_matrix)
-        assert factorization.u_etas[0].index == exiting_index
+        assert factorization.row_etas[0].index == exiting_index
+        assert factorization.row_etas[0].values == pytest.approx(np.array([-2.5]))
         assert factorization.ftran(rhs) == pytest.approx(
             np.linalg.solve(updated_basis_matrix, rhs)
         )
