@@ -1,0 +1,21 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/pdhg",
+    "cmake.buildDirectory": "${workspaceFolder}/pdhg/build",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/pdhg/build/compile_commands.json",
+    "C_Cpp.default.compilerPath": "/usr/bin/clang++",
+    "C_Cpp.default.cppStandard": "c++23",
+    "C_Cpp.default.intelliSenseMode": "macos-clang-arm64",
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/pdhg/build",
+        "--query-driver=/usr/bin/clang++"
+    ],
+    "files.associations": {
+        "*.metal": "cpp"
+    },
+    "python.testing.pytestArgs": [
+        "simplex"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
+}
