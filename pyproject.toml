@@ -31,7 +31,7 @@ simplex = { workspace = true }
 testpaths = ["common/tests", "ipm/tests", "simplex/tests"]
 addopts = "-ra -v"
 pythonpath = ["ipm/src", "simplex/src", "common/src"]
-norecursedirs = ["linopt-cpp"]
+norecursedirs = ["pdhg"]
 
 [tool.mypy]
 strict = true

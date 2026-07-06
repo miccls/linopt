@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <stdexcept>
 #include <vector>
 
 namespace pdhg::linalg {
@@ -22,6 +23,11 @@ enum class VectorOperation : std::uint8_t {
 
 using Scalar = double;
 using Index = std::int32_t;
+
+class LinearAlgebraError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 
 class MetalBuffer {
  public:

@@ -60,6 +60,7 @@ set(PDHG_LINT_SOURCES
 set(PDHG_FORMAT_SOURCES
   ${PDHG_SOURCES}
   src/linear_algebra.h
+  src/metal_details.h
 )
 
 add_library(pdhg_core
@@ -90,12 +91,15 @@ if(PDHG_BUILD_TESTS)
   enable_testing()
   add_executable(pdhg_tests
     tests/test_linear_algebra.cpp
+    tests/test_metal_details.cpp
   )
   list(APPEND PDHG_LINT_SOURCES
     tests/test_linear_algebra.cpp
+    tests/test_metal_details.cpp
   )
   list(APPEND PDHG_FORMAT_SOURCES
     tests/test_linear_algebra.cpp
+    tests/test_metal_details.cpp
   )
   target_link_libraries(pdhg_tests PRIVATE pdhg_core GTest::gtest_main)
   include(GoogleTest)

@@ -6,7 +6,6 @@
 #include <gsl/gsl>
 #include <magic_enum/magic_enum.hpp>
 #include <numeric>
-#include <stdexcept>
 #include <utility>
 
 namespace pdhg::linalg {
@@ -14,7 +13,7 @@ namespace {
 
 void checkNonnegativeDimension(Index value, MatrixDimension dimension) {
   if (value < 0) {
-    throw std::invalid_argument(
+    throw LinearAlgebraError(
         std::format("{}s must be nonnegative", magic_enum::enum_name(dimension)));
   }
 }
@@ -30,15 +29,15 @@ Index toIndex(std::size_t value) { return gsl::narrow<Index>(value); }
 
 void checkIndex(Index index, Index limit, MatrixDimension dimension) {
   if (index < 0 || index >= limit) {
-    throw std::out_of_range(
+    throw LinearAlgebraError(
         std::format("{} is outside matrix bounds", magic_enum::enum_name(dimension)));
   }
 }
 
 void checkSameSize(const Vector& lhs, const Vector& rhs, VectorOperation operation) {
   if (lhs.size() != rhs.size()) {
-    throw std::invalid_argument(std::format("{} requires equal vector sizes",
-                                            magic_enum::enum_name(operation)));
+    throw LinearAlgebraError(std::format("{} requires equal vector sizes",
+                                         magic_enum::enum_name(operation)));
   }
 }
 
@@ -72,28 +71,27 @@ void checkSparseStorage(Index major_dim, MatrixDimension major_dimension,
   checkNonnegativeDimension(major_dim, major_dimension);
   checkNonnegativeDimension(minor_dim, minor_dimension);
   if (offset.size() != toSize(major_dim, major_dimension) + 1) {
-    throw std::invalid_argument(
+    throw LinearAlgebraError(
         std::format("{}_offset must have major dimension + 1 entries",
                     magic_enum::enum_name(major_dimension)));
   }
   if (idx.size() != values.size()) {
-    throw std::invalid_argument(std::format("{}_idx and values must have equal sizes",
-                                            magic_enum::enum_name(minor_dimension)));
+    throw LinearAlgebraError(std::format("{}_idx and values must have equal sizes",
+                                         magic_enum::enum_name(minor_dimension)));
   }
   if (offset.empty() || offset.front() != 0) {
-    throw std::invalid_argument(std::format("{}_offset must start at zero",
-                                            magic_enum::enum_name(major_dimension)));
+    throw LinearAlgebraError(std::format("{}_offset must start at zero",
+                                         magic_enum::enum_name(major_dimension)));
   }
   for (std::size_t i = 1; i < offset.size(); ++i) {
     if (offset[i] < offset[i - 1]) {
-      throw std::invalid_argument(std::format("{}_offset must be nondecreasing",
-                                              magic_enum::enum_name(major_dimension)));
+      throw LinearAlgebraError(std::format("{}_offset must be nondecreasing",
+                                           magic_enum::enum_name(major_dimension)));
     }
   }
   if (offset.back() != toIndex(values.size())) {
-    throw std::invalid_argument(
-        std::format("{}_offset must end at the number of values",
-                    magic_enum::enum_name(major_dimension)));
+    throw LinearAlgebraError(std::format("{}_offset must end at the number of values",
+                                         magic_enum::enum_name(major_dimension)));
   }
   for (Index index : idx) {
     checkIndex(index, minor_dim, minor_dimension);
@@ -148,7 +146,7 @@ void Vector::axpy(Scalar alpha, const Vector& x) {
 
 void Vector::clamp(Scalar lower, Scalar upper) {
   if (lower > upper) {
-    throw std::invalid_argument("clamp lower bound exceeds upper bound");
+    throw LinearAlgebraError("clamp lower bound exceeds upper bound");
   }
   for (Scalar& value : values_) {
     value = std::clamp(value, lower, upper);
@@ -168,14 +166,14 @@ Scalar Vector::norm2() const { return std::sqrt(dot(*this)); }
 
 Scalar Vector::minValue() const {
   if (values_.empty()) {
-    throw std::invalid_argument("minValue requires a nonempty vector");
+    throw LinearAlgebraError("minValue requires a nonempty vector");
   }
   return *std::min_element(values_.begin(), values_.end());
 }
 
 Scalar Vector::maxValue() const {
   if (values_.empty()) {
-    throw std::invalid_argument("maxValue requires a nonempty vector");
+    throw LinearAlgebraError("maxValue requires a nonempty vector");
   }
   return *std::max_element(values_.begin(), values_.end());
 }
@@ -275,10 +273,10 @@ CscMatrix::CscMatrix(Index rows, Index cols, std::vector<Index> col_offset,
 
 void csrMatvec(const CsrMatrix& matrix, const Vector& x, Vector& y) {
   if (x.size() != toSize(matrix.cols(), MatrixDimension::col)) {
-    throw std::invalid_argument("csrMatvec x size must match matrix columns");
+    throw LinearAlgebraError("csrMatvec x size must match matrix columns");
   }
   if (y.size() != toSize(matrix.rows(), MatrixDimension::row)) {
-    throw std::invalid_argument("csrMatvec y size must match matrix rows");
+    throw LinearAlgebraError("csrMatvec y size must match matrix rows");
   }
 
   const auto rows = toSize(matrix.rows(), MatrixDimension::row);
@@ -294,10 +292,10 @@ void csrMatvec(const CsrMatrix& matrix, const Vector& x, Vector& y) {
 
 void cscTransposeMatvec(const CscMatrix& matrix, const Vector& y, Vector& x) {
   if (y.size() != toSize(matrix.rows(), MatrixDimension::row)) {
-    throw std::invalid_argument("cscTransposeMatvec y size must match matrix rows");
+    throw LinearAlgebraError("cscTransposeMatvec y size must match matrix rows");
   }
   if (x.size() != toSize(matrix.cols(), MatrixDimension::col)) {
-    throw std::invalid_argument("cscTransposeMatvec x size must match matrix columns");
+    throw LinearAlgebraError("cscTransposeMatvec x size must match matrix columns");
   }
 
   const auto cols = toSize(matrix.cols(), MatrixDimension::col);
